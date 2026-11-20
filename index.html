@@ -31,6 +31,7 @@ label{font-size:14px;color:var(--mut)}
 .tag.live{background:#d1fae5;color:var(--ok)}.tag.done{background:#fee4e2;color:var(--bad)}
 table{width:100%;border-collapse:collapse;font-size:15px}
 th,td{padding:8px;border-bottom:1px solid var(--line);text-align:start}
+.nocopy{-webkit-user-select:none;user-select:none}.nocopy input,.nocopy select{-webkit-user-select:text;user-select:text}
 .big{font-size:44px;font-weight:800;color:var(--ok);text-align:center}
 </style>
 </head>
@@ -67,11 +68,23 @@ let tick, refresh;
 function route() {
   clearInterval(tick); clearInterval(refresh);
   const adm = location.hash === '#admin';
+  document.body.classList.toggle('nocopy', !adm);
   $('#lnk').textContent = adm ? 'بۆ تاقیکردنەوەکان' : 'بەڕێوەبەر';
   $('#lnk').href = adm ? '#' : '#admin';
   adm ? (sessionStorage.pw ? aHome() : aLogin()) : home();
 }
 onhashchange = route;
+// ڕێگری لە کلیکی ڕاست و کۆپی (تەنها لە بەشی قوتابی)
+const stu = () => location.hash !== '#admin';
+const inField = e => /^(INPUT|SELECT|TEXTAREA)$/.test((e.target && e.target.tagName) || '');
+addEventListener('contextmenu', e => stu() && e.preventDefault());
+['copy', 'cut', 'dragstart', 'selectstart'].forEach(t => addEventListener(t, e => stu() && !inField(e) && e.preventDefault()));
+addEventListener('keydown', e => {
+  if (!stu()) return;
+  const k = (e.key || '').toLowerCase(), c = e.ctrlKey || e.metaKey;
+  if (e.key === 'F12' || (c && ['u', 's', 'p'].includes(k)) || (c && e.shiftKey && ['i', 'j', 'c'].includes(k))) e.preventDefault();
+});
+const shuffle = a => { for (let i = a.length - 1; i > 0; i--) { const j = Math.floor(Math.random() * (i + 1)); [a[i], a[j]] = [a[j], a[i]]; } return a; };
 
 /* ================= قوتابی ================= */
 let EX = [], SK = 0;
@@ -95,24 +108,28 @@ function drawHome() {
 }
 function pick(id) {
   clearInterval(refresh);
-  V.innerHTML = `<div class="card"><h3>ناوی تەواوت بنووسە</h3><input id="nm" autofocus>
+  V.innerHTML = `<div class="card"><h3>زانیارییەکانت بنووسە</h3><label>ناوی تەواو</label><input id="nm" autofocus>
+  <label>کۆلێژ / پەیمانگا</label><select id="cl"><option value="">هەڵبژێرە...</option><option>کۆلێجی تەکنیکی کەلار</option><option>پەیمانگای تەکنیکی کەلار</option></select>
+  <label>خولی خوێندن</label><select id="sh"><option value="">هەڵبژێرە...</option><option>بەیانیان</option><option>ئێواران</option></select>
   <p class="mut">کاتێک دەستپێدەکەیت تایمەر دەست پێدەکات و ناگەڕێتەوە.</p>
   <div class="row"><button id="go">دەستپێکردن</button><button class="ghost" onclick="route()">گەڕانەوە</button></div><p id="er" class="err"></p></div>`;
   $('#go').onclick = async () => {
-    const name = $('#nm').value.trim(); if (!name) return;
+    const name = $('#nm').value.trim(), college = $('#cl').value, shift = $('#sh').value;
+    if (!name || !college || !shift) return $('#er').textContent = 'ناو، کۆلێژ/پەیمانگا و خولی خوێندن پێویستە';
     $('#go').disabled = true;
-    try { const d = await call('begin', {examId:id, name}); run(d.exam, d.questions, name); }
+    try { const d = await call('begin', {examId:id, name, college, shift}); run(d.exam, d.questions, name, {college, shift}); }
     catch (e) { $('#er').textContent = e; $('#go').disabled = false; }
   };
 }
-function run(ex, qs, name) {
+function run(ex, qs, name, info) {
+  qs.forEach(q => q.ord = shuffle([0, 1, 2, 3].filter(k => q.o[k])));
   let i = 0, A = {}, tEnd = 0, done = false; const per = ex.mode == 'per';
   if (!per) tEnd = Date.now() + ex.totalMin*60000;
   const last = () => i == qs.length - 1;
   function show() {
     const q = qs[i]; if (per) tEnd = Date.now() + ex.perQSec*1000;
     V.innerHTML = `<div class="bar"><span>پرسیار ${i+1} لە ${qs.length}</span><b id="tm"></b></div>
-    <div class="card"><h3>${esc(q.text)}</h3>${q.o.map((o,k) => o ? `<button class="opt ${A[q.id]==k+1?'on':''}" data-k="${k+1}">${esc(o)}</button>` : '').join('')}</div>
+    <div class="card"><h3>${esc(q.text)}</h3>${q.ord.map(k => `<button class="opt ${A[q.id]==k+1?'on':''}" data-k="${k+1}">${esc(q.o[k])}</button>`).join('')}</div>
     <div class="row">${!per && i ? '<button class="ghost" id="pv">پێشوو</button>' : ''}<button id="nx">${last() ? 'تەواوکردن' : 'دواتر'}</button></div>`;
     V.querySelectorAll('.opt').forEach(b => b.onclick = () => {
       A[q.id] = +b.dataset.k; V.querySelectorAll('.opt').forEach(x => x.classList.toggle('on', x == b));
@@ -124,7 +141,7 @@ function run(ex, qs, name) {
     if (done) return; done = true; clearInterval(tick);
     V.innerHTML = '<p class="mut">ئەنجامەکەت دەنێردرێت...</p>';
     try {
-      const r = await call('submit', {examId:ex.id, name, answers:A});
+      const r = await call('submit', {examId:ex.id, name, answers:A, ...info});
       V.innerHTML = `<div class="card"><h2>سوپاس ${esc(name)}</h2><p class="mut">ئەنجامی تاقیکردنەوەکەت</p><div class="big">${r.score} / ${r.total}</div></div><button class="ghost" onclick="location.hash='';route()">گەڕانەوە</button>`;
     } catch (e) { done = false; V.innerHTML = `<div class="card err">${esc(e)}</div><button onclick="this.remove();finishRetry()">دووبارە ناردن</button>`; window.finishRetry = finish; }
   }
@@ -207,16 +224,16 @@ async function aRes(id) {
     const r = (await call('results', {examId:id})).sort((a,b) => b.score - a.score);
     const avg = r.length ? (r.reduce((s,x) => s + (x.total ? x.score/x.total : 0), 0) / r.length * 100).toFixed(1) : 0;
     V.innerHTML = `<div class="row"><h2 class="grow">ئەنجامەکان</h2><button class="sm" id="csv">دابەزاندنی CSV</button><button class="ghost" onclick="aHome()">گەڕانەوە</button></div>
-    <p class="mut">${r.length} قوتابی · تێکڕای ${avg}%</p><div class="card" style="overflow:auto"><table><tr><th>ناو</th><th>نمرە</th><th>%</th><th>کات</th><th></th></tr>` +
-    r.map(x => `<tr><td>${esc(x.name)}</td><td>${x.score}/${x.total}</td><td>${x.total ? Math.round(x.score/x.total*100) : 0}</td><td>${fmt(x.time)}</td>
-      <td><button class="sm red" onclick="aDr('${id}',this.dataset.n)" data-n="${esc(x.name)}">سڕینەوە</button></td></tr>`).join('') + '</table></div>';
+    <p class="mut">${r.length} قوتابی · تێکڕای ${avg}%</p><div class="card" style="overflow:auto"><table><tr><th>ناو</th><th>کۆلێژ/پەیمانگا</th><th>خول</th><th>نمرە</th><th>%</th><th>کات</th><th></th></tr>` +
+    r.map(x => `<tr><td>${esc(x.name)}</td><td>${esc(x.college)}</td><td>${esc(x.shift)}</td><td>${x.score}/${x.total}</td><td>${x.total ? Math.round(x.score/x.total*100) : 0}</td><td>${fmt(x.time)}</td>
+      <td><button class="sm red" onclick="aDr('${id}',${x.time})">سڕینەوە</button></td></tr>`).join('') + '</table></div>';
     $('#csv').onclick = () => {
-      const t = '\ufeffname,score,total,percent,time\n' + r.map(x => `"${x.name.replace(/"/g,'""')}",${x.score},${x.total},${x.total ? Math.round(x.score/x.total*100) : 0},${fmt(x.time)}`).join('\n');
+      const t = '\ufeffname,college,shift,score,total,percent,time\n' + r.map(x => `"${x.name.replace(/"/g,'""')}","${x.college}","${x.shift}",${x.score},${x.total},${x.total ? Math.round(x.score/x.total*100) : 0},${fmt(x.time)}`).join('\n');
       const a = document.createElement('a'); a.href = URL.createObjectURL(new Blob([t], {type:'text/csv'})); a.download = 'results.csv'; a.click();
     };
   } catch (e) { fail(e); }
 }
-async function aDr(ex, name) { if (confirm('ئەنجامی ' + name + ' بسڕدرێتەوە؟ (دەتوانێت دووبارە تاقیبکاتەوە)')) { try { await call('delResult', {examId:ex, name}); aRes(ex); } catch (e) { alert(e); } } }
+async function aDr(ex, time) { if (confirm('ئەم ئەنجامە بسڕدرێتەوە؟ (قوتابییەکە دەتوانێت دووبارە تاقیبکاتەوە)')) { try { await call('delResult', {examId:ex, time}); aRes(ex); } catch (e) { alert(e); } } }
 
 route();
 </script>
